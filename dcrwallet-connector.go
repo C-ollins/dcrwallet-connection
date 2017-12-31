@@ -4,14 +4,41 @@ import (
 	"fmt"
 	"strings"
 	"path/filepath"
+	"encoding/json"
 
 	pb "github.com/decred/dcrwallet/rpc/walletrpc"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"github.com/decred/dcrd/dcrutil"
 )
-var certificateFile = filepath.Join(dcrutil.AppDataDir("dcrwallet", false), "rpc.cert")
+//var certificateFile = filepath.Join(dcrutil.AppDataDir("dcrwallet", false), "rpc.cert")
+var certificateFile = filepath.Join("/data/data/com.decrediton/files/dcrwallet", "rpc.cert")
+type Balance struct{
+	Total					int64
+	Spendable				int64
+	ImmatureReward			int64
+	ImmatureStakeGeneration	int64
+	LockedByTickets			int64
+	VotingAuthority			int64
+	UnConfirmed				int64
+}
+type Account struct{
+	Number				int32
+	Name				string
+	Balance				*Balance
+	External_key_count	int32
+	Internal_key_count	int32
+	Imported_key_count	int32
+}
+type Accounts struct{
+	Count					int
+	ErrorMessage			string
+	ErrorCode				int
+	ErrorOccurred			bool
+	Acc						*[]Account
+	Current_block_hash		[]byte
+	Current_block_height	int32
+}
 /* 
 	Error Codes
 	// OK is returned on success.
@@ -131,7 +158,7 @@ func connect() (*grpc.ClientConn, error){
 	return conn,nil	
 }
 
-func CreateWallet(passPhrase string) string {
+func RestoreWallet(passPhrase string, userInput string) string {
 	connection, err := connect()
 	if err != nil{
 		fmt.Println(err)
@@ -139,15 +166,13 @@ func CreateWallet(passPhrase string) string {
 	}
 	defer connection.Close()
 	seedsService := pb.NewSeedServiceClient(connection);
-	generateSeedRequest := &pb.GenerateRandomSeedRequest{
-		SeedLength : 0 }
-	generateSeedResponse, err := seedsService.GenerateRandomSeed(context.Background(), generateSeedRequest);
+	decodeSeedRequest := &pb.DecodeSeedRequest{UserInput : userInput}
+	decodeSeedResponse, err := seedsService.DecodeSeed(context.Background(), decodeSeedRequest);
 	if err != nil{
 		fmt.Println(err)
-		return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : ""}}`
+		return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : "Error while trying to decode seed"}}`
 	}
-	seed := generateSeedResponse.GetSeedBytes()
-	seedMnemonic := generateSeedResponse.GetSeedMnemonic();
+	seed := decodeSeedResponse.DecodedSeed
 	privatePassphrase := []byte(passPhrase)
 	publicPassPhrase := []byte("public")
 	walletLoader := pb.NewWalletLoaderServiceClient(connection)
@@ -162,6 +187,85 @@ func CreateWallet(passPhrase string) string {
 		return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : ""}}`
 	}
 	createWalletResponse.Reset();
+	if err != nil{
+		fmt.Println(err)
+		return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : ""}}`
+	}
+	return `{"ErrorOccurred" : "false", "Success" : {"content": "true"}}`
+}
+
+func GenerateSeed() string{
+	connection, err := connect()
+	if err != nil{
+		fmt.Println(err)
+		return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : ""}}`
+	}
+	defer connection.Close()
+	seedsService := pb.NewSeedServiceClient(connection);
+	generateSeedRequest := &pb.GenerateRandomSeedRequest{
+		SeedLength : 0 }
+	generateSeedResponse, err := seedsService.GenerateRandomSeed(context.Background(), generateSeedRequest);
+	if err != nil{
+		fmt.Println(err)
+		return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : ""}}`
+	}
+	seedMnemonic := generateSeedResponse.GetSeedMnemonic();
+	return `{"ErrorOccurred" : "false", "Success" : {"content": "`+seedMnemonic+`"}}`
+}
+
+func VerifySeed(seedMnemonic string) string{
+	connection, err := connect()
+	if err != nil{
+		fmt.Println(err)
+		return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : ""}}`
+	}
+	defer connection.Close()
+	seedsService := pb.NewSeedServiceClient(connection);
+	decodeSeedRequest := &pb.DecodeSeedRequest{
+		UserInput: seedMnemonic }
+	_, err = seedsService.DecodeSeed(context.Background(), decodeSeedRequest);
+	if err != nil{
+		fmt.Println(err)
+		if(strings.Contains(err.Error(), "InvalidArgument")){
+			return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : "The seed you entered is not valid"}}`
+		}
+		return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : ""}}`
+	}
+	return `{"ErrorOccurred" : "false", "Success" : {"content": "true"}}`
+}
+
+func CreateWallet(passPhrase string,seedMnemonic string) string {
+	connection, err := connect()
+	if err != nil{
+		fmt.Println(err)
+		return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : ""}}`
+	}
+	defer connection.Close()
+	seedsService := pb.NewSeedServiceClient(connection);
+	decodeSeedRequest := &pb.DecodeSeedRequest{
+		UserInput: seedMnemonic }
+	decodeSeedResponse, err := seedsService.DecodeSeed(context.Background(), decodeSeedRequest);
+	if err != nil{
+		fmt.Println(err)
+		if(strings.Contains(err.Error(), "InvalidArgument")){
+			return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : "The seed you entered is not valid"}}`
+		}
+		return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : ""}}`
+	}
+	seed := decodeSeedResponse.DecodedSeed
+	privatePassphrase := []byte(passPhrase)
+	publicPassPhrase := []byte("public")
+	walletLoader := pb.NewWalletLoaderServiceClient(connection)
+	createWallet := &pb.CreateWalletRequest{
+		PublicPassphrase: publicPassPhrase,
+	 	PrivatePassphrase: privatePassphrase,
+	 	Seed: seed,
+	}
+	_, err = walletLoader.CreateWallet(context.Background(), createWallet)
+	if err != nil{
+		fmt.Println(err)
+		return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : ""}}`
+	}
 	if err != nil{
 		fmt.Println(err)
 		return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : ""}}`
@@ -203,7 +307,7 @@ func OpenWallet() string{
 	walletLoader := pb.NewWalletLoaderServiceClient(connection)
 	openWalletRequest := &pb.OpenWalletRequest{
 		PublicPassphrase: publicPassPhrase}
-	openWalletResponse, err := walletLoader.OpenWallet(context.Background(), openWalletRequest)
+	_, err = walletLoader.OpenWallet(context.Background(), openWalletRequest)
 	if err != nil{
 		if(strings.Contains(err.Error(), "FailedPrecondition")){
 			return `{"ErrorOccurred" : "false", "Success" : {"content": "true"}}`
@@ -213,7 +317,6 @@ func OpenWallet() string{
 			return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : "Incorrect public passphrase"}}`
 		}
 	}
-	openWalletResponse.Reset()
 	return `{"ErrorOccurred" : "false", "Success" : {"content": "true"}}`
 }
 
@@ -226,13 +329,95 @@ func CloseWallet() string{
 	defer connection.Close()
 	walletLoader := pb.NewWalletLoaderServiceClient(connection)
 	closeWalletRequest := &pb.CloseWalletRequest{}
-	closeWalletResponse, err :=  walletLoader.CloseWallet(context.Background(), closeWalletRequest)
+	_, err =  walletLoader.CloseWallet(context.Background(), closeWalletRequest)
 	if err != nil{
 		fmt.Printf("%v", err)
 		if(strings.Contains(err.Error(), "FailedPrecondition")){
 			return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : "No wallet is currently open"}}`
 		}
 	}
-	closeWalletResponse.Reset()
 	return `{"ErrorOccurred" : "false", "Success" : {"content": "true"}}`
 }
+
+func GetAccounts() string{
+	accounts := &Accounts{}
+	connection, err := connect()
+	if err != nil{
+		fmt.Println(err)
+		accounts.ErrorOccurred = true
+		accounts.ErrorMessage = "Error while connecting to dcrwallet"
+		result,_ := json.Marshal(accounts)
+		return string(result)
+	}
+	defer connection.Close()
+	walletService := pb.NewWalletServiceClient(connection)
+	accountsRequest := &pb.AccountsRequest{}
+	accountResponse, err := walletService.Accounts(context.Background(), accountsRequest)
+	if err != nil{
+		fmt.Printf("%v", err)
+		accounts.ErrorOccurred = true
+		accounts.ErrorMessage = "Error while connecting to getting accounts"
+		result,_ := json.Marshal(accounts)
+		return string(result)
+	}
+	accountArray := make([] Account, len(accountResponse.Accounts))
+	for index, value := range accountResponse.Accounts{
+		balanceRequest := &pb.BalanceRequest{
+			AccountNumber: value.AccountNumber,
+			RequiredConfirmations: 3}
+		balanceResponse,_ := walletService.Balance(context.Background(), balanceRequest)
+		balance := Balance{
+			Total: balanceResponse.GetTotal(),
+			Spendable: balanceResponse.GetSpendable(),
+			ImmatureReward: balanceResponse.GetImmatureReward(),
+			ImmatureStakeGeneration: balanceResponse.GetImmatureStakeGeneration(),
+			LockedByTickets: balanceResponse.GetLockedByTickets(),
+			VotingAuthority: balanceResponse.GetVotingAuthority(),
+			UnConfirmed: balanceResponse.GetUnconfirmed()}
+		accountArray[index] = Account{
+			Name: value.GetAccountName(),
+			Number: int32(value.GetAccountNumber()),
+			External_key_count: int32(value.GetExternalKeyCount()),
+			Internal_key_count: int32(value.GetInternalKeyCount()),
+			Imported_key_count: int32(value.GetImportedKeyCount()),
+			Balance: &balance}
+	}
+	accounts = &Accounts{
+		Count: len(accountResponse.Accounts),
+		Current_block_hash: accountResponse.GetCurrentBlockHash(),
+		Current_block_height: accountResponse.GetCurrentBlockHeight(),
+		Acc: &accountArray,
+		ErrorOccurred: false,
+	}
+	result,_ := json.Marshal(accounts)
+	return string(result)
+}
+
+// func GetBalance(num int) string{
+// 	connection, err := connect()
+// 	if err != nil{
+// 		fmt.Println(err)
+// 		//return `{"ErrorOccurred" : "true", "Error" : {"Code": 0, "Message" : "Error while connecting to dcrwallet"}}`
+// 	}
+// 	defer connection.Close()
+// 	walletService := pb.NewWalletServiceClient(connection)
+// 	balanceRequest := &pb.BalanceRequest{
+// 		AccountNumber: uint32(num),
+// 		RequiredConfirmations: 3}
+// 	balanceResponse,_ := walletService.Balance(context.Background(), balanceRequest)
+// 	balance := &Balance{
+// 		Total: balanceResponse.GetTotal(),
+// 		Spendable: balanceResponse.GetSpendable(),
+// 		ImmatureReward: balanceResponse.GetImmatureReward(),
+// 		ImmatureStakeGeneration: balanceResponse.GetImmatureStakeGeneration(),
+// 		LockedByTickets: balanceResponse.GetLockedByTickets(),
+// 		VotingAuthority: balanceResponse.GetVotingAuthority(),
+// 		UnConfirmed: balanceResponse.GetUnconfirmed()}
+// 	result,_ := json.Marshal(balance);
+// 	return string(result)
+// }
+
+// // func (accounts *Accounts) AddAccount(account Account) []Account{
+// // 	accounts.Acc = append(accounts.Acc, account);
+// // 	return accounts.Acc
+// // }
